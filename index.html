@@ -148,6 +148,9 @@
                     this.world = new CANNON.World();
                     this.world.gravity.set(0, -9.8, 0);
                     
+                    // Clock for timing
+                    this.clock = new THREE.Clock();
+                    
                     // Create player
                     this.createPlayer();
                     
@@ -158,7 +161,7 @@
                     this.obstacles = [];
                     this.obstaclesAvoided = 0;
                     
-                    // Create snow particles
+                    // Create snow particles - MUST be created after player
                     this.createSnowParticles();
                     
                     // Create ski trail
@@ -167,7 +170,6 @@
                     // Game state
                     this.isRunning = false;
                     this.gameOver = false;
-                    this.clock = new THREE.Clock();
                     
                     // Controls
                     this.keys = { left: false, right: false };
@@ -185,6 +187,14 @@
                     this.finalScoreElement = document.getElementById('final-score');
                     this.gameOverElement = document.getElementById('game-over');
                     this.startScreen = document.getElementById('start-screen');
+                    
+                    // Add instruction hint to start screen
+                    const instructionHint = document.createElement('p');
+                    instructionHint.innerHTML = 'Use <strong>A</strong> and <strong>D</strong> keys to control your skier';
+                    instructionHint.style.fontSize = '28px';
+                    instructionHint.style.color = '#ffff00';
+                    instructionHint.style.marginTop = '10px';
+                    this.startScreen.insertBefore(instructionHint, document.getElementById('start-btn'));
                     
                     // Setup event listeners
                     document.getElementById('start-btn').addEventListener('click', () => this.startGame());
@@ -549,7 +559,7 @@
                 
                 createSnowParticles() {
                     // Create snowfall particles
-                    const particleCount = 4000; // Even more particles for better effect
+                    const particleCount = 5000; // Increased particle count
                     const particleGeometry = new THREE.BufferGeometry();
                     const particlePositions = new Float32Array(particleCount * 3);
                     const particleSizes = new Float32Array(particleCount);
@@ -566,7 +576,7 @@
                     context.arc(16, 16, 8, 0, Math.PI * 2, false);
                     context.fill();
                     
-                    // Add some sparkle effect
+                    // Add sparkle effect
                     context.globalAlpha = 0.7;
                     context.beginPath();
                     context.moveTo(16, 4);
@@ -583,18 +593,18 @@
                     
                     const snowTexture = new THREE.CanvasTexture(canvas);
                     
-                    // Wider distribution area for snow - make it massive
-                    const areaWidth = 500;
-                    const areaHeight = 300;
-                    const areaDepth = 500;
+                    // Define snow distribution area relative to camera
+                    const areaWidth = 400;
+                    const areaHeight = 200;
+                    const areaDepth = 400;
                     
-                    // Set random positions in a large volume
+                    // Initial snow positions
                     for (let i = 0; i < particleCount; i++) {
                         particlePositions[i * 3] = Math.random() * areaWidth - areaWidth/2;
-                        particlePositions[i * 3 + 1] = Math.random() * areaHeight;
+                        particlePositions[i * 3 + 1] = Math.random() * areaHeight; 
                         particlePositions[i * 3 + 2] = Math.random() * areaDepth - areaDepth/2;
                         
-                        particleSizes[i] = Math.random() * 3 + 1;
+                        particleSizes[i] = Math.random() * 2 + 1;
                     }
                     
                     particleGeometry.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
@@ -602,10 +612,10 @@
                     
                     const particleMaterial = new THREE.PointsMaterial({
                         color: 0xFFFFFF,
-                        size: 2,
+                        size: 1.5,
                         map: snowTexture,
                         transparent: true,
-                        alphaTest: 0.1,
+                        alphaTest: 0.2,
                         blending: THREE.AdditiveBlending,
                         depthWrite: false,
                         sizeAttenuation: true
@@ -614,16 +624,21 @@
                     this.snowParticles = new THREE.Points(particleGeometry, particleMaterial);
                     this.scene.add(this.snowParticles);
                     
-                    // Store snow parameters for updates
+                    // Always create a separate snow container that follows the player
+                    this.snowContainer = new THREE.Object3D();
+                    this.scene.add(this.snowContainer);
+                    this.snowContainer.add(this.snowParticles);
+                    
+                    // Store snow parameters
                     this.snowParams = {
                         count: particleCount,
                         width: areaWidth,
                         height: areaHeight,
                         depth: areaDepth,
-                        fallingSpeed: 0.5,
+                        fallingSpeed: 0.6,
                         driftSpeed: 0.1,
-                        spawnHeight: areaHeight,
-                        initialized: true  // Flag to track initialization
+                        lastUpdate: 0,
+                        active: true
                     };
                     
                     console.log("Snow particles created:", particleCount);
@@ -644,63 +659,56 @@
                 }
                 
                 updateSnowParticles() {
-                    // Return early if snow particles aren't created or game isn't running
-                    if (!this.snowParticles || !this.isRunning || !this.snowParams.initialized) {
+                    if (!this.snowParticles || !this.snowParams || !this.snowParams.active) {
                         return;
                     }
                     
+                    // Ensure snow container follows the player
+                    this.snowContainer.position.copy(this.playerBody.position);
+                    
                     const positions = this.snowParticles.geometry.attributes.position.array;
-                    const playerPos = this.playerBody.position;
+                    const now = this.clock.getElapsedTime();
                     
-                    // We need to process ALL particles
-                    const totalParticles = this.snowParams.count;
+                    // Throttle updates slightly for performance
+                    if (now - this.snowParams.lastUpdate < 0.016) {
+                        return;
+                    }
                     
-                    for (let i = 0; i < totalParticles * 3; i += 3) {
-                        // Move particles down with varying speeds for natural effect
-                        const individualSpeed = this.snowParams.fallingSpeed * (0.8 + Math.random() * 0.4);
-                        positions[i + 1] -= individualSpeed;
+                    this.snowParams.lastUpdate = now;
+                    
+                    const localBounds = {
+                        minX: -this.snowParams.width/2,
+                        maxX: this.snowParams.width/2,
+                        minY: -10,
+                        maxY: this.snowParams.height,
+                        minZ: -this.snowParams.depth/2,
+                        maxZ: this.snowParams.depth/2
+                    };
+                    
+                    // Update all snow particles
+                    for (let i = 0; i < positions.length; i += 3) {
+                        // Move particles down
+                        positions[i + 1] -= this.snowParams.fallingSpeed;
                         
-                        // Add horizontal drift with varying intensities
+                        // Add drift
                         positions[i] += (Math.random() - 0.5) * this.snowParams.driftSpeed;
                         positions[i + 2] += (Math.random() - 0.5) * this.snowParams.driftSpeed;
                         
-                        // Get position relative to player for bounds checking
-                        const relX = positions[i] - playerPos.x;
-                        const relY = positions[i + 1] - playerPos.y;
-                        const relZ = positions[i + 2] - playerPos.z;
-                        
-                        // Half the max distance for better concentration around player
-                        const maxDist = Math.max(this.snowParams.width, this.snowParams.depth) / 3;
-                        
-                        // Check if particle is out of bounds and needs to be reset
+                        // Check if particle is outside local bounds (already relative to player)
                         if (
-                            positions[i + 1] < -5 || // Below ground with buffer
-                            Math.abs(relX) > maxDist || 
-                            Math.abs(relZ) > maxDist ||
-                            relY < -20 || 
-                            relY > this.snowParams.height
+                            positions[i] < localBounds.minX || positions[i] > localBounds.maxX ||
+                            positions[i + 1] < localBounds.minY || positions[i + 1] > localBounds.maxY ||
+                            positions[i + 2] < localBounds.minZ || positions[i + 2] > localBounds.maxZ
                         ) {
-                            // Reset particle position above and around the player
-                            // Use smaller area for reset to concentrate particles
-                            const resetWidth = this.snowParams.width / 2;
-                            const resetDepth = this.snowParams.depth / 2;
-                            
-                            positions[i] = playerPos.x + (Math.random() * resetWidth - resetWidth/2);
-                            positions[i + 1] = playerPos.y + this.snowParams.height * 0.7 + Math.random() * this.snowParams.height * 0.3;
-                            positions[i + 2] = playerPos.z + (Math.random() * resetDepth - resetDepth/2);
+                            // Reset particle position to top of snow volume
+                            positions[i] = (Math.random() * localBounds.maxX * 2) + localBounds.minX;
+                            positions[i + 1] = localBounds.maxY * Math.random();
+                            positions[i + 2] = (Math.random() * localBounds.maxZ * 2) + localBounds.minZ;
                         }
                     }
                     
-                    // Flag the position attribute as needing an update
+                    // Mark for update
                     this.snowParticles.geometry.attributes.position.needsUpdate = true;
-                    
-                    // Debug log every 100 frames to make sure this function is being called
-                    if (Math.random() < 0.01) {
-                        console.log("Snow particles updated at player position:", 
-                                    playerPos.x.toFixed(0), 
-                                    playerPos.y.toFixed(0), 
-                                    playerPos.z.toFixed(0));
-                    }
                 }
                 
                 updateSkiTrail() {
@@ -773,6 +781,9 @@
                     // Hide start screen
                     this.startScreen.style.display = 'none';
                     
+                    // Show in-game instructions briefly
+                    this.showGameInstructions();
+                    
                     // Reset game state
                     this.obstaclesAvoided = 0;
                     this.scoreElement.textContent = '0';
@@ -790,10 +801,48 @@
                     }
                     this.obstacles = [];
                     
+                    // Ensure snow is active
+                    if (this.snowParams) {
+                        this.snowParams.active = true;
+                    }
+                    
                     // Start the game loop
                     this.isRunning = true;
                     this.clock.start();
                     this.animate();
+                }
+                
+                showGameInstructions() {
+                    // Create and show in-game instructions
+                    const instructions = document.createElement('div');
+                    instructions.id = 'game-instructions';
+                    instructions.style.cssText = `
+                        position: absolute;
+                        top: 50%;
+                        left: 50%;
+                        transform: translate(-50%, -50%);
+                        background-color: rgba(0, 0, 0, 0.7);
+                        color: white;
+                        padding: 30px;
+                        border-radius: 10px;
+                        text-align: center;
+                        z-index: 90;
+                        font-family: Arial, sans-serif;
+                        font-size: 24px;
+                    `;
+                    instructions.innerHTML = `
+                        <h2>How to Play</h2>
+                        <p>Use A and D keys to move left and right</p>
+                        <p>Avoid hitting trees and rocks for as long as possible</p>
+                        <p>Get Ready!</p>
+                    `;
+                    document.getElementById('game-container').appendChild(instructions);
+                    
+                    // Remove instructions after 3 seconds
+                    setTimeout(() => {
+                        const el = document.getElementById('game-instructions');
+                        if (el) el.remove();
+                    }, 3000);
                 }
                 
                 restartGame() {
@@ -880,19 +929,16 @@
                 }
                 
                 animate() {
-                    // Use this.isRunning as the flag to continue animation
                     if (!this.isRunning) return;
                     
-                    // Schedule the next frame - MUST BE FIRST
+                    // Schedule next frame FIRST
                     requestAnimationFrame(this.animate.bind(this));
                     
-                    // Update snow before anything else
+                    // IMPORTANT - Always update snow particles here
                     this.updateSnowParticles();
                     
-                    // Update game state
+                    // Update game & render
                     this.update();
-                    
-                    // Render scene
                     this.renderer.render(this.scene, this.camera);
                 }
                 
