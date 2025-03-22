@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skiing Survival</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        #game-container { position: relative; width: 100vw; height: 100vh; }
+        #ui-container { 
+            position: absolute; 
+            top: 20px; 
+            left: 20px; 
+            z-index: 10; 
+            color: white; 
+            font-family: Arial, sans-serif;
+            font-size: 24px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+        #game-over { 
+            display: none; 
+            position: absolute; 
+            top: 50%; 
+            left: 50%; 
+            transform: translate(-50%, -50%); 
+            background-color: rgba(0, 0, 0, 0.7); 
+            color: white; 
+            padding: 30px; 
+            border-radius: 10px; 
+            text-align: center;
+            z-index: 100;
+            font-family: Arial, sans-serif;
+        }
+        #start-screen { 
+            position: absolute; 
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex; 
+            flex-direction: column;
+            justify-content: center; 
+            align-items: center; 
+            background-color: rgba(0, 0, 0, 0.7); 
+            color: white; 
+            z-index: 100;
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+        #start-screen h1 {
+            font-size: 72px;
+            margin-bottom: 20px;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+        #start-screen p {
+            font-size: 24px;
+            margin: 10px 0;
+            max-width: 600px;
+        }
+        button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 15px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 24px;
+            margin: 20px 0;
+            cursor: pointer;
+            border-radius: 10px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #3e8e41;
+        }
+        #error-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(200, 0, 0, 0.8);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            font-family: Arial, sans-serif;
+            text-align: center;
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="ui-container">
+            <div>Obstacles Avoided: <span id="score">0</span></div>
+        </div>
+        <div id="game-over">
+            <h2>Game Over!</h2>
+            <p>You avoided <span id="final-score">0</span> obstacles!</p>
+            <button id="restart-btn">Restart Game</button>
+        </div>
+        <div id="start-screen">
+            <h1>Skiing Survival</h1>
+            <p>Race down an icy mountain, avoiding obstacles along the way. Use A and D keys to move left and right.</p>
+            <p>How many obstacles can you avoid before crashing?</p>
+            <button id="start-btn">Start Game</button>
+        </div>
+    </div>
+
+    <!-- Core Libraries Only -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.151.3/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
+    
+    <!-- Simple Game Implementation -->
+    <script>
+        // Wait for DOM to be fully loaded
+        document.addEventListener('DOMContentLoaded', () => {
+            // Simple skiing game implementation
+            class SkiingGame {
+                constructor() {
+                    // Setup renderer
+                    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+                    this.renderer.setClearColor(0x87CEEB); // Sky blue
+                    document.getElementById('game-container').prepend(this.renderer.domElement);
+                    
+                    // Setup scene
+                    this.scene = new THREE.Scene();
+                    this.scene.fog = new THREE.Fog(0x87CEEB, 100, 500);
+                    
+                    // Setup camera - initially with a temp position, will be updated to first-person
+                    this.camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 1000);
+                    
+                    // Increase field of view to see more of the environment
+                    this.camera.fov = 70;
+                    this.camera.updateProjectionMatrix();
+                    
+                    // Setup lighting
+                    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+                    this.scene.add(ambientLight);
+                    
+                    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                    directionalLight.position.set(10, 50, 10);
+                    directionalLight.lookAt(0, 0, 0);
+                    this.scene.add(directionalLight);
+                    
+                    // Create physics world
+                    this.world = new CANNON.World();
+                    this.world.gravity.set(0, -9.8, 0);
+                    
+                    // Create player
+                    this.createPlayer();
+                    
+                    // Create terrain
+                    this.createTerrain();
+                    
+                    // Create obstacles
+                    this.obstacles = [];
+                    this.obstaclesAvoided = 0;
+                    
+                    // Create snow particles
+                    this.createSnowParticles();
+                    
+                    // Create ski trail
+                    this.createSkiTrail();
+                    
+                    // Game state
+                    this.isRunning = false;
+                    this.gameOver = false;
+                    this.clock = new THREE.Clock();
+                    
+                    // Controls
+                    this.keys = { left: false, right: false };
+                    document.addEventListener('keydown', (e) => {
+                        if (e.code === 'KeyA') this.keys.left = true;
+                        if (e.code === 'KeyD') this.keys.right = true;
+                    });
+                    document.addEventListener('keyup', (e) => {
+                        if (e.code === 'KeyA') this.keys.left = false;
+                        if (e.code === 'KeyD') this.keys.right = false;
+                    });
+                    
+                    // UI elements
+                    this.scoreElement = document.getElementById('score');
+                    this.finalScoreElement = document.getElementById('final-score');
+                    this.gameOverElement = document.getElementById('game-over');
+                    this.startScreen = document.getElementById('start-screen');
+                    
+                    // Setup event listeners
+                    document.getElementById('start-btn').addEventListener('click', () => this.startGame());
+                    document.getElementById('restart-btn').addEventListener('click', () => this.restartGame());
+                    
+                    // Handle window resize
+                    window.addEventListener('resize', () => this.onWindowResize());
+                }
+                
+                createPlayer() {
+                    // Create a skier with first-person view
+                    const playerGroup = new THREE.Group();
+                    
+                    // The actual player body won't be visible (since we're in first person)
+                    const playerGeometry = new THREE.BoxGeometry(1, 1.8, 0.5);
+                    const playerMaterial = new THREE.MeshLambertMaterial({ color: 0xff0000 });
+                    const playerBody = new THREE.Mesh(playerGeometry, playerMaterial);
+                    playerBody.visible = false; // Hide the player body in first-person
+                    playerGroup.add(playerBody);
+                    
+                    // Add visible skis that appear at the bottom of the camera view
+                    const skiGeometry = new THREE.BoxGeometry(0.2, 0.05, 1.8);
+                    const skiMaterial = new THREE.MeshLambertMaterial({ color: 0x000033 });
+                    
+                    // Left ski
+                    this.leftSki = new THREE.Mesh(skiGeometry, skiMaterial);
+                    this.leftSki.position.set(-0.3, -0.9, 0);
+                    playerGroup.add(this.leftSki);
+                    
+                    // Right ski
+                    this.rightSki = new THREE.Mesh(skiGeometry, skiMaterial);
+                    this.rightSki.position.set(0.3, -0.9, 0);
+                    playerGroup.add(this.rightSki);
+                    
+                    this.playerMesh = playerGroup;
+                    this.scene.add(this.playerMesh);
+                    
+                    // Physics body - use a cylinder for better sliding
+                    const shape = new CANNON.Cylinder(0.4, 0.4, 1.8, 8);
+                    this.playerBody = new CANNON.Body({
+                        mass: 5,
+                        position: new CANNON.Vec3(0, 2, 0),
+                        linearDamping: 0.5, // Add damping to prevent excessive rolling
+                        angularDamping: 0.99 // High angular damping to prevent rotation
+                    });
+                    
+                    // Rotate the cylinder to align with skis
+                    const quaternion = new CANNON.Quaternion();
+                    quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), Math.PI / 2);
+                    
+                    this.playerBody.addShape(shape, new CANNON.Vec3(), quaternion);
+                    this.world.addBody(this.playerBody);
+                    
+                    // Lock rotation to prevent rolling
+                    this.playerBody.fixedRotation = true;
+                    this.playerBody.updateMassProperties();
+                    
+                    // Apply a constant force to simulate skiing downhill
+                    this.playerBody.applyForce(new CANNON.Vec3(0, -15, -80), this.playerBody.position);
+                    
+                    // Initialize speed properties
+                    this.baseSpeed = -40;  // Doubled base speed
+                    this.currentSpeed = -80;
+                    this.maxSpeed = -80;  // Doubled max speed
+                    this.acceleration = -0.1; // Increased acceleration
+                }
+                
+                createTerrain() {
+                    // Add distant mountains for better scenery
+                    this.createDistantMountains();
+                    
+                    // COMPLETE REWRITE: Use a single infinite terrain plane instead of segments
+                    const terrainSize = 10000; // Much larger single terrain
+                    const geometry = new THREE.PlaneGeometry(100, terrainSize, 20, 100);
+                    
+                    // Create a more realistic snow texture programmatically
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 1024;
+                    canvas.height = 1024;
+                    const context = canvas.getContext('2d');
+                    context.fillStyle = '#ffffff';
+                    context.fillRect(0, 0, 1024, 1024);
+                    
+                    // Add subtle tracks and noise for snow texture
+                    context.fillStyle = '#f0f0f0';
+                    
+                    // Add subtle tire tracks
+                    for (let i = 0; i < 10; i++) {
+                        const trackX = 200 + Math.random() * 600;
+                        const trackWidth = 5 + Math.random() * 10;
+                        context.fillRect(trackX, 0, trackWidth, 1024);
+                        context.fillRect(trackX + 30 + Math.random() * 20, 0, trackWidth, 1024);
+                    }
+                    
+                    // Add snow specs
+                    for (let i = 0; i < 10000; i++) {
+                        const x = Math.random() * 1024;
+                        const y = Math.random() * 1024;
+                        const size = Math.random() * 2 + 0.5;
+                        context.fillRect(x, y, size, size);
+                    }
+                    
+                    const texture = new THREE.CanvasTexture(canvas);
+                    texture.wrapS = THREE.RepeatWrapping;
+                    texture.wrapT = THREE.RepeatWrapping;
+                    texture.repeat.set(5, 500); // Much higher repeat for large terrain
+                    
+                    const material = new THREE.MeshLambertMaterial({ 
+                        color: 0xffffff,
+                        map: texture
+                    });
+                    
+                    // Create a single large terrain
+                    this.terrain = new THREE.Mesh(geometry, material);
+                    this.terrain.rotation.x = -Math.PI / 2;
+                    this.terrain.position.z = -terrainSize/2; // Center the terrain
+                    this.scene.add(this.terrain);
+                    
+                    // Create side walls that span the entire terrain
+                    const wallWidth = 20;
+                    const wallHeight = 40;
+                    const wallGeometry = new THREE.BoxGeometry(wallWidth, wallHeight, terrainSize);
+                    const wallMaterial = new THREE.MeshLambertMaterial({ color: 0xdddddd });
+                    
+                    // Extended ground on sides
+                    const sideGroundGeometry = new THREE.PlaneGeometry(wallWidth, terrainSize);
+                    const sideGroundMaterial = new THREE.MeshLambertMaterial({ 
+                        color: 0xffffff, 
+                        map: texture 
+                    });
+                    
+                    // Left side wall and ground
+                    this.leftWall = new THREE.Mesh(wallGeometry, wallMaterial);
+                    this.leftWall.position.set(-60, 10, -terrainSize/2);
+                    this.scene.add(this.leftWall);
+                    
+                    this.leftGround = new THREE.Mesh(sideGroundGeometry, sideGroundMaterial);
+                    this.leftGround.rotation.x = -Math.PI / 2;
+                    this.leftGround.position.set(-60, 0, -terrainSize/2);
+                    this.scene.add(this.leftGround);
+                    
+                    // Right side wall and ground
+                    this.rightWall = new THREE.Mesh(wallGeometry, wallMaterial);
+                    this.rightWall.position.set(60, 10, -terrainSize/2);
+                    this.scene.add(this.rightWall);
+                    
+                    this.rightGround = new THREE.Mesh(sideGroundGeometry, sideGroundMaterial);
+                    this.rightGround.rotation.x = -Math.PI / 2;
+                    this.rightGround.position.set(60, 0, -terrainSize/2);
+                    this.scene.add(this.rightGround);
+                    
+                    // Create a ceiling/sky effect 
+                    const ceilingGeometry = new THREE.PlaneGeometry(140, terrainSize);
+                    const ceilingMaterial = new THREE.MeshBasicMaterial({ 
+                        color: 0x87CEEB,
+                        side: THREE.DoubleSide
+                    });
+                    this.ceiling = new THREE.Mesh(ceilingGeometry, ceilingMaterial);
+                    this.ceiling.rotation.x = Math.PI / 2;
+                    this.ceiling.position.set(0, 35, -terrainSize/2);
+                    this.scene.add(this.ceiling);
+                    
+                    // Physics body for terrain
+                    const shape = new CANNON.Plane();
+                    this.terrainBody = new CANNON.Body({
+                        mass: 0, // Static body
+                        material: new CANNON.Material({ friction: 0.05 })
+                    });
+                    this.terrainBody.addShape(shape);
+                    this.terrainBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+                    this.world.addBody(this.terrainBody);
+                    
+                    // Store terrain boundaries for obstacle placement
+                    this.terrainBounds = {
+                        startZ: -terrainSize,
+                        endZ: 0,
+                        width: 90  // Width of usable terrain (-45 to +45)
+                    };
+                    
+                    // Initialize obstacle grid
+                    this.initializeObstacleGrid();
+                }
+                
+                createDistantMountains() {
+                    // Create distant mountains like in the reference image
+                    const mountainGeometry = new THREE.BufferGeometry();
+                    const vertices = [];
+                    const mountainColors = [];
+                    
+                    // Define mountain range colors
+                    const peakColor = new THREE.Color(0xffffff); // White peaks
+                    const midColor = new THREE.Color(0xaaaaaa); // Gray middle
+                    const baseColor = new THREE.Color(0x888888); // Darker base
+                    
+                    // Create a jagged mountain range
+                    const segments = 100;
+                    const width = 800;
+                    const depth = 200;
+                    const height = 150;
+                    const zPos = -800;
+                    
+                    // Create first triangle fan mountain range (further back)
+                    for (let i = 0; i <= segments; i++) {
+                        const x = (i / segments) * width - width / 2;
+                        let y = 0;
+                        const z = zPos - depth;
+                        
+                        // Base points
+                        vertices.push(x, y, z);
+                        mountainColors.push(baseColor.r, baseColor.g, baseColor.b);
+                        
+                        // Mountain peaks with noise
+                        const peakHeight = Math.abs(Math.sin(i / 5) * height) + Math.random() * 20;
+                        y = peakHeight;
+                        vertices.push(x, y, z);
+                        
+                        // Determine color based on height (snow line)
+                        if (y > height * 0.7) {
+                            mountainColors.push(peakColor.r, peakColor.g, peakColor.b);
+                        } else if (y > height * 0.4) {
+                            mountainColors.push(midColor.r, midColor.g, midColor.b);
+                        } else {
+                            mountainColors.push(baseColor.r, baseColor.g, baseColor.b);
+                        }
+                    }
+                    
+                    // Create second triangle fan mountain range (closer)
+                    for (let i = 0; i <= segments; i++) {
+                        const x = (i / segments) * width - width / 2;
+                        let y = 0;
+                        const z = zPos;
+                        
+                        // Base points
+                        vertices.push(x, y, z);
+                        mountainColors.push(baseColor.r, baseColor.g, baseColor.b);
+                        
+                        // Mountain peaks with noise
+                        const peakHeight = Math.abs(Math.sin(i / 3) * height * 0.8) + Math.random() * 30;
+                        y = peakHeight;
+                        vertices.push(x, y, z);
+                        
+                        // Determine color based on height (snow line)
+                        if (y > height * 0.6) {
+                            mountainColors.push(peakColor.r, peakColor.g, peakColor.b);
+                        } else if (y > height * 0.3) {
+                            mountainColors.push(midColor.r, midColor.g, midColor.b);
+                        } else {
+                            mountainColors.push(baseColor.r, baseColor.g, baseColor.b);
+                        }
+                    }
+                    
+                    mountainGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+                    mountainGeometry.setAttribute('color', new THREE.Float32BufferAttribute(mountainColors, 3));
+                    
+                    const mountainMaterial = new THREE.MeshBasicMaterial({
+                        vertexColors: true,
+                        side: THREE.DoubleSide
+                    });
+                    
+                    const mountains = new THREE.Mesh(mountainGeometry, mountainMaterial);
+                    this.scene.add(mountains);
+                    
+                    // Add blue sky background
+                    this.scene.background = new THREE.Color(0x87CEEB);
+                }
+                
+                initializeObstacleGrid() {
+                    // Create a grid system for obstacle placement
+                    this.obstacleGrid = {
+                        cellSize: 50,  // Size of each grid cell
+                        cells: {}      // Object to store occupied cells
+                    };
+                    
+                    // Calculate total number of cells needed
+                    const terrainLength = Math.abs(this.terrainBounds.endZ - this.terrainBounds.startZ);
+                    const terrainWidth = this.terrainBounds.width;
+                    
+                    this.gridCells = {
+                        z: Math.ceil(terrainLength / this.obstacleGrid.cellSize),
+                        x: Math.ceil(terrainWidth / this.obstacleGrid.cellSize)
+                    };
+                    
+                    console.log(`Created obstacle grid with ${this.gridCells.z * this.gridCells.x} cells`);
+                }
+                
+                createObstacle(z) {
+                    // Random position within terrain bounds
+                    const x = Math.random() * 90 - 45; // -45 to +45 (full width of terrain)
+                    
+                    // Ensure z is within terrain bounds
+                    z = Math.max(this.terrainBounds.startZ + 10, Math.min(z, this.terrainBounds.endZ - 10));
+                    
+                    // Check if this cell is already occupied
+                    const cellX = Math.floor((x + 45) / this.obstacleGrid.cellSize);
+                    const cellZ = Math.floor(Math.abs(z) / this.obstacleGrid.cellSize);
+                    const cellKey = `${cellX}_${cellZ}`;
+                    
+                    if (this.obstacleGrid.cells[cellKey]) {
+                        // Cell already has an obstacle, skip creating another
+                        return null;
+                    }
+                    
+                    // Mark this cell as occupied
+                    this.obstacleGrid.cells[cellKey] = true;
+                    
+                    // Random obstacle type
+                    const type = Math.random() > 0.5 ? 'tree' : 'rock';
+                    let obstacleMesh;
+                    
+                    if (type === 'tree') {
+                        // Create a simple tree
+                        const group = new THREE.Group();
+                        
+                        // Trunk
+                        const trunkGeometry = new THREE.CylinderGeometry(0.3, 0.5, 3, 8);
+                        const trunkMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+                        const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+                        trunk.position.y = 1.5;
+                        group.add(trunk);
+                        
+                        // Tree top
+                        const topGeometry = new THREE.ConeGeometry(1.5, 4, 8);
+                        const topMaterial = new THREE.MeshLambertMaterial({ color: 0x228B22 });
+                        const top = new THREE.Mesh(topGeometry, topMaterial);
+                        top.position.y = 4.5;
+                        group.add(top);
+                        
+                        obstacleMesh = group;
+                    } else {
+                        // Create a rock
+                        const rockGeometry = new THREE.DodecahedronGeometry(1.5, 0);
+                        const rockMaterial = new THREE.MeshLambertMaterial({ color: 0x808080 });
+                        obstacleMesh = new THREE.Mesh(rockGeometry, rockMaterial);
+                        obstacleMesh.scale.y = 0.8;
+                    }
+                    
+                    obstacleMesh.position.set(x, type === 'tree' ? 0 : 1, z);
+                    this.scene.add(obstacleMesh);
+                    
+                    // Physics body - slightly smaller than visual for a more forgiving collision
+                    const radius = type === 'tree' ? 0.8 : 1.2;
+                    const shape = new CANNON.Sphere(radius);
+                    const obstacleBody = new CANNON.Body({
+                        mass: 0,
+                        position: new CANNON.Vec3(x, radius, z)
+                    });
+                    obstacleBody.addShape(shape);
+                    this.world.addBody(obstacleBody);
+                    
+                    // Store reference
+                    this.obstacles.push({
+                        mesh: obstacleMesh,
+                        body: obstacleBody,
+                        type: type,
+                        passed: false,
+                        cellKey: cellKey,
+                        position: { x, z }
+                    });
+                    
+                    return this.obstacles[this.obstacles.length - 1];
+                }
+                
+                createSnowParticles() {
+                    // Create snowfall particles
+                    const particleCount = 4000; // Even more particles for better effect
+                    const particleGeometry = new THREE.BufferGeometry();
+                    const particlePositions = new Float32Array(particleCount * 3);
+                    const particleSizes = new Float32Array(particleCount);
+                    
+                    // Create a better snowflake texture
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 32;
+                    canvas.height = 32;
+                    const context = canvas.getContext('2d');
+                    
+                    // Create a more realistic snowflake
+                    context.fillStyle = 'white';
+                    context.beginPath();
+                    context.arc(16, 16, 8, 0, Math.PI * 2, false);
+                    context.fill();
+                    
+                    // Add some sparkle effect
+                    context.globalAlpha = 0.7;
+                    context.beginPath();
+                    context.moveTo(16, 4);
+                    context.lineTo(16, 28);
+                    context.moveTo(4, 16);
+                    context.lineTo(28, 16);
+                    context.moveTo(8, 8);
+                    context.lineTo(24, 24);
+                    context.moveTo(8, 24);
+                    context.lineTo(24, 8);
+                    context.strokeStyle = 'white';
+                    context.lineWidth = 1;
+                    context.stroke();
+                    
+                    const snowTexture = new THREE.CanvasTexture(canvas);
+                    
+                    // Wider distribution area for snow - make it massive
+                    const areaWidth = 500;
+                    const areaHeight = 300;
+                    const areaDepth = 500;
+                    
+                    // Set random positions in a large volume
+                    for (let i = 0; i < particleCount; i++) {
+                        particlePositions[i * 3] = Math.random() * areaWidth - areaWidth/2;
+                        particlePositions[i * 3 + 1] = Math.random() * areaHeight;
+                        particlePositions[i * 3 + 2] = Math.random() * areaDepth - areaDepth/2;
+                        
+                        particleSizes[i] = Math.random() * 3 + 1;
+                    }
+                    
+                    particleGeometry.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+                    particleGeometry.setAttribute('size', new THREE.BufferAttribute(particleSizes, 1));
+                    
+                    const particleMaterial = new THREE.PointsMaterial({
+                        color: 0xFFFFFF,
+                        size: 2,
+                        map: snowTexture,
+                        transparent: true,
+                        alphaTest: 0.1,
+                        blending: THREE.AdditiveBlending,
+                        depthWrite: false,
+                        sizeAttenuation: true
+                    });
+                    
+                    this.snowParticles = new THREE.Points(particleGeometry, particleMaterial);
+                    this.scene.add(this.snowParticles);
+                    
+                    // Store snow parameters for updates
+                    this.snowParams = {
+                        count: particleCount,
+                        width: areaWidth,
+                        height: areaHeight,
+                        depth: areaDepth,
+                        fallingSpeed: 0.5,
+                        driftSpeed: 0.1,
+                        spawnHeight: areaHeight,
+                        initialized: true  // Flag to track initialization
+                    };
+                    
+                    console.log("Snow particles created:", particleCount);
+                }
+                
+                createSkiTrail() {
+                    // Create a trail that follows the player's skis
+                    this.trailPositions = [];
+                    this.trailMeshes = [];
+                    this.trailLifespan = 100; // frames
+                    
+                    // Create trail material
+                    this.trailMaterial = new THREE.MeshBasicMaterial({
+                        color: 0xDDDDFF,
+                        transparent: true,
+                        opacity: 0.7
+                    });
+                }
+                
+                updateSnowParticles() {
+                    // Return early if snow particles aren't created or game isn't running
+                    if (!this.snowParticles || !this.isRunning || !this.snowParams.initialized) {
+                        return;
+                    }
+                    
+                    const positions = this.snowParticles.geometry.attributes.position.array;
+                    const playerPos = this.playerBody.position;
+                    
+                    // We need to process ALL particles
+                    const totalParticles = this.snowParams.count;
+                    
+                    for (let i = 0; i < totalParticles * 3; i += 3) {
+                        // Move particles down with varying speeds for natural effect
+                        const individualSpeed = this.snowParams.fallingSpeed * (0.8 + Math.random() * 0.4);
+                        positions[i + 1] -= individualSpeed;
+                        
+                        // Add horizontal drift with varying intensities
+                        positions[i] += (Math.random() - 0.5) * this.snowParams.driftSpeed;
+                        positions[i + 2] += (Math.random() - 0.5) * this.snowParams.driftSpeed;
+                        
+                        // Get position relative to player for bounds checking
+                        const relX = positions[i] - playerPos.x;
+                        const relY = positions[i + 1] - playerPos.y;
+                        const relZ = positions[i + 2] - playerPos.z;
+                        
+                        // Half the max distance for better concentration around player
+                        const maxDist = Math.max(this.snowParams.width, this.snowParams.depth) / 3;
+                        
+                        // Check if particle is out of bounds and needs to be reset
+                        if (
+                            positions[i + 1] < -5 || // Below ground with buffer
+                            Math.abs(relX) > maxDist || 
+                            Math.abs(relZ) > maxDist ||
+                            relY < -20 || 
+                            relY > this.snowParams.height
+                        ) {
+                            // Reset particle position above and around the player
+                            // Use smaller area for reset to concentrate particles
+                            const resetWidth = this.snowParams.width / 2;
+                            const resetDepth = this.snowParams.depth / 2;
+                            
+                            positions[i] = playerPos.x + (Math.random() * resetWidth - resetWidth/2);
+                            positions[i + 1] = playerPos.y + this.snowParams.height * 0.7 + Math.random() * this.snowParams.height * 0.3;
+                            positions[i + 2] = playerPos.z + (Math.random() * resetDepth - resetDepth/2);
+                        }
+                    }
+                    
+                    // Flag the position attribute as needing an update
+                    this.snowParticles.geometry.attributes.position.needsUpdate = true;
+                    
+                    // Debug log every 100 frames to make sure this function is being called
+                    if (Math.random() < 0.01) {
+                        console.log("Snow particles updated at player position:", 
+                                    playerPos.x.toFixed(0), 
+                                    playerPos.y.toFixed(0), 
+                                    playerPos.z.toFixed(0));
+                    }
+                }
+                
+                updateSkiTrail() {
+                    // Update the trail behind the player
+                    if (this.isRunning && !this.gameOver) {
+                        // Add new trail segment at current position
+                        const leftSkiPos = new THREE.Vector3(
+                            this.playerBody.position.x - 0.4,
+                            0.05, // just above terrain
+                            this.playerBody.position.z
+                        );
+                        
+                        const rightSkiPos = new THREE.Vector3(
+                            this.playerBody.position.x + 0.4,
+                            0.05, // just above terrain
+                            this.playerBody.position.z
+                        );
+                        
+                        // Add trail segments
+                        this.addTrailSegment(leftSkiPos);
+                        this.addTrailSegment(rightSkiPos);
+                        
+                        // Update existing trail segments
+                        for (let i = this.trailMeshes.length - 1; i >= 0; i--) {
+                            this.trailPositions[i].lifespan--;
+                            
+                            // Fade out trail
+                            if (this.trailPositions[i].lifespan > 0) {
+                                const opacity = this.trailPositions[i].lifespan / this.trailLifespan;
+                                this.trailMeshes[i].material.opacity = opacity * 0.7;
+                            } else {
+                                // Remove old trail segments
+                                this.scene.remove(this.trailMeshes[i]);
+                                this.trailMeshes.splice(i, 1);
+                                this.trailPositions.splice(i, 1);
+                            }
+                        }
+                    }
+                }
+                
+                addTrailSegment(position) {
+                    // Create a small disc for each trail segment
+                    const trailGeometry = new THREE.CircleGeometry(0.2, 8);
+                    trailGeometry.rotateX(-Math.PI / 2); // Orient to face up
+                    
+                    const trailMesh = new THREE.Mesh(
+                        trailGeometry,
+                        this.trailMaterial.clone()
+                    );
+                    
+                    trailMesh.position.copy(position);
+                    this.scene.add(trailMesh);
+                    
+                    // Store trail segment
+                    this.trailMeshes.push(trailMesh);
+                    this.trailPositions.push({ 
+                        position: position.clone(),
+                        lifespan: this.trailLifespan
+                    });
+                    
+                    // Limit number of trail segments
+                    if (this.trailMeshes.length > 200) {
+                        this.scene.remove(this.trailMeshes[0]);
+                        this.trailMeshes.shift();
+                        this.trailPositions.shift();
+                    }
+                }
+                
+                startGame() {
+                    // Hide start screen
+                    this.startScreen.style.display = 'none';
+                    
+                    // Reset game state
+                    this.obstaclesAvoided = 0;
+                    this.scoreElement.textContent = '0';
+                    this.gameOver = false;
+                    
+                    // Reset player position and speed
+                    this.playerBody.position.set(0, 2, 0);
+                    this.currentSpeed = this.baseSpeed;
+                    this.playerBody.velocity.set(0, 0, this.currentSpeed);
+                    
+                    // Clear existing obstacles
+                    for (const obstacle of this.obstacles) {
+                        this.scene.remove(obstacle.mesh);
+                        this.world.removeBody(obstacle.body);
+                    }
+                    this.obstacles = [];
+                    
+                    // Start the game loop
+                    this.isRunning = true;
+                    this.clock.start();
+                    this.animate();
+                }
+                
+                restartGame() {
+                    this.gameOverElement.style.display = 'none';
+                    this.startGame();
+                }
+                
+                endGame() {
+                    this.isRunning = false;
+                    this.gameOver = true;
+                    this.gameOverElement.style.display = 'block';
+                    this.finalScoreElement.textContent = this.obstaclesAvoided.toString();
+                }
+                
+                onWindowResize() {
+                    this.camera.aspect = window.innerWidth / window.innerHeight;
+                    this.camera.updateProjectionMatrix();
+                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+                }
+                
+                updateObstacles() {
+                    // Remove obstacles that are too far behind
+                    const safeDistance = 200;
+                    const playerZ = this.playerBody.position.z;
+                    
+                    for (let i = this.obstacles.length - 1; i >= 0; i--) {
+                        const obstacle = this.obstacles[i];
+                        
+                        // Remove obstacles far behind the player
+                        if (obstacle.body.position.z > playerZ + safeDistance) {
+                            // Free up the grid cell
+                            delete this.obstacleGrid.cells[obstacle.cellKey];
+                            
+                            // Remove the obstacle
+                            this.scene.remove(obstacle.mesh);
+                            this.world.removeBody(obstacle.body);
+                            this.obstacles.splice(i, 1);
+                        }
+                    }
+                    
+                    // Calculate the farthest distance we should place obstacles
+                    const forwardViewDistance = 400;
+                    
+                    // Create obstacles ahead of the player
+                    const maxObstacles = 100; // Limit the total number of obstacles
+                    
+                    if (this.obstacles.length < maxObstacles) {
+                        // Determine how many new obstacles to create
+                        const newObstaclesToCreate = 3; // Create multiple obstacles each frame
+                        
+                        for (let i = 0; i < newObstaclesToCreate; i++) {
+                            // Random position ahead
+                            const obstacleZ = playerZ - Math.random() * forwardViewDistance - 50;
+                            this.createObstacle(obstacleZ);
+                        }
+                    }
+                    
+                    // Check for collision with obstacles
+                    this.updateObstacleCollisions();
+                }
+                
+                updateObstacleCollisions() {
+                    const playerZ = this.playerBody.position.z;
+                    
+                    for (const obstacle of this.obstacles) {
+                        // Mark obstacles as passed when the player moves past them
+                        if (!obstacle.passed && playerZ < obstacle.body.position.z) {
+                            obstacle.passed = true;
+                            this.obstaclesAvoided++;
+                            this.scoreElement.textContent = this.obstaclesAvoided.toString();
+                        }
+                        
+                        // Check for collision - only if the obstacle is close enough to the player
+                        const obstacleZ = obstacle.body.position.z;
+                        
+                        // Only check for collisions within reasonable distance
+                        if (Math.abs(obstacleZ - playerZ) < 10) {
+                            const distance = this.playerBody.position.distanceTo(obstacle.body.position);
+                            if (distance < 2.2 && !this.gameOver) {
+                                this.endGame();
+                            }
+                        }
+                    }
+                }
+                
+                animate() {
+                    // Use this.isRunning as the flag to continue animation
+                    if (!this.isRunning) return;
+                    
+                    // Schedule the next frame - MUST BE FIRST
+                    requestAnimationFrame(this.animate.bind(this));
+                    
+                    // Update snow before anything else
+                    this.updateSnowParticles();
+                    
+                    // Update game state
+                    this.update();
+                    
+                    // Render scene
+                    this.renderer.render(this.scene, this.camera);
+                }
+                
+                update() {
+                    // Don't update if game is not running
+                    if (!this.isRunning) return;
+                    
+                    // Update physics
+                    this.world.step(1/60);
+                    
+                    // Update player
+                    this.playerMesh.position.copy(this.playerBody.position);
+                    this.playerMesh.rotation.set(0, 0, 0);
+                    
+                    // Camera follows player
+                    this.camera.position.x = this.playerBody.position.x;
+                    this.camera.position.y = this.playerBody.position.y + 1.7; // Eye level
+                    this.camera.position.z = this.playerBody.position.z;
+                    
+                    // Look ahead down the slope
+                    this.camera.lookAt(
+                        this.playerBody.position.x,
+                        this.playerBody.position.y,
+                        this.playerBody.position.z - 80
+                    );
+                    
+                    // Handle turning
+                    let turnAngle = 0;
+                    const turnSpeed = 0.8 + (Math.abs(this.currentSpeed) / 100);
+                    
+                    if (this.keys.left) {
+                        this.playerBody.position.x -= turnSpeed;
+                        turnAngle = 0.2;
+                    } else if (this.keys.right) {
+                        this.playerBody.position.x += turnSpeed;
+                        turnAngle = -0.2;
+                    }
+                    
+                    // Position and rotate skis
+                    this.leftSki.position.set(-0.3, -0.9, 0.5);
+                    this.rightSki.position.set(0.3, -0.9, 0.5);
+                    this.leftSki.rotation.y = turnAngle;
+                    this.rightSki.rotation.y = turnAngle;
+                    
+                    // Increase speed over time
+                    this.currentSpeed = Math.max(this.currentSpeed + this.acceleration, this.maxSpeed);
+                    this.playerBody.velocity.z = this.currentSpeed;
+                    
+                    // Update ski trail
+                    this.updateSkiTrail();
+                    
+                    // Update obstacles - new simplified system
+                    this.updateObstacles();
+                    
+                    // Check if player fell off the terrain
+                    if (Math.abs(this.playerBody.position.x) > 50 && !this.gameOver) {
+                        this.endGame();
+                    }
+                }
+            }
+            
+            // Create and start the game
+            const game = new SkiingGame();
+        });
+    </script>
+</body>
+</html> 
